@@ -1,9 +1,11 @@
 /**
  * Pharmacy Pricing Provider Interface
- * 
+ *
  * Abstracts pricing data sources to support multiple providers (GoodRx, Costco, static fallback).
  * Includes caching layer with 24h TTL to minimize external API calls.
  */
+
+import { logger } from "./logger.ts";
 
 export interface PharmacyPrice {
   pharmacy: string;
@@ -1017,7 +1019,7 @@ export function createPricingProvider(providerName?: string): PricingProvider {
     case "static":
       return new StaticProvider();
     default:
-      console.warn(`Unknown pricing provider: ${provider}, falling back to static`);
+      logger.warn({ provider }, "unknown pricing provider, falling back to static");
       return new StaticProvider();
   }
 }

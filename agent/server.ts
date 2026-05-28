@@ -13,6 +13,10 @@ import express from "express";
 import OpenAI from "openai";
 import { Keypair, Horizon } from "@stellar/stellar-sdk";
 import { createCorsMiddleware } from "../shared/cors.ts";
+import { applySecurityMiddleware } from "../shared/security-middleware.ts";
+import { logger } from "../shared/logger.ts";
+import { validateTask, getSuspiciousTaskCount } from "../shared/task-validation.ts";
+import { appendAuditEntry } from "../shared/audit-log.ts";
 import {
   comparePharmacyPrices,
   auditBill,
@@ -133,6 +137,8 @@ async function runAgent(task: string) {
   const toolCalls: Array<{ tool: string; input: any; result: any }> = [];
   let finalResponse = "";
   let llmUsage: { promptTokens: number; completionTokens: number } = { promptTokens: 0, completionTokens: 0 };
+  let runToolCalls = 0;
+  let truncated = false;
 
   for (let iteration = 0; iteration < 15; iteration++) {
     let response;
@@ -144,8 +150,7 @@ async function runAgent(task: string) {
         messages,
       });
     } catch (llmErr: any) {
-      console.error(`  ❌ LLM API error (iteration ${iteration}): ${llmErr.message}`);
-      // If we already have tool results, summarize them instead of returning the error
+      logger.error({ err: llmErr.message, iteration }, "LLM API error");
       if (toolCalls.length > 0 && !finalResponse) {
         finalResponse = toolCalls.map(tc => {
           if (tc.result?.error) return `${tc.tool}: ${tc.result.error}`;
@@ -183,10 +188,18 @@ async function runAgent(task: string) {
       finalResponse = message.content;
     }
 
-    // If no tool calls, we're done
     if (!message.tool_calls || message.tool_calls.length === 0) break;
 
-    // Execute tool calls
+    // Cap at iteration boundary — breaking mid-batch would orphan tool_call_ids
+    if (runToolCalls + message.tool_calls.length > MAX_TOOL_CALLS_PER_RUN) {
+      toolCallCapHitsTotal++;
+      truncated = true;
+      appendAuditEntry({ event: "agent.tool_cap_exceeded", actor: "agent", details: { max: MAX_TOOL_CALLS_PER_RUN, ran: runToolCalls } });
+      finalResponse = finalResponse || "Tool call limit reached; partial results returned.";
+      break;
+    }
+    runToolCalls += message.tool_calls.length;
+
     for (const toolCall of message.tool_calls) {
       if (toolCall.type !== "function") continue;
       const fnName = toolCall.function.name;
@@ -197,14 +210,14 @@ async function runAgent(task: string) {
         fnArgs = {};
       }
 
-      console.log(`  🔧 ${fnName}(${JSON.stringify(fnArgs).slice(0, 100)})`);
+      logger.info({ tool: fnName, args: JSON.stringify(fnArgs).slice(0, 100) }, "tool call");
 
       let result: any;
       try {
         result = await executeTool(fnName, fnArgs);
         toolCalls.push({ tool: fnName, input: fnArgs, result });
       } catch (err: any) {
-        console.error(`  ❌ ${fnName} error: ${err.message}`);
+        logger.error({ tool: fnName, err: err.message }, "tool error");
         result = { error: err.message };
         toolCalls.push({ tool: fnName, input: fnArgs, result });
       }
@@ -219,7 +232,7 @@ async function runAgent(task: string) {
     if (choice.finish_reason === "stop") break;
   }
 
-  return { response: finalResponse, toolCalls, spending: getSpendingSummary(), llmUsage };
+  return { response: finalResponse, toolCalls, spending: getSpendingSummary(), llmUsage, truncated };
 }
 
 // Metrics endpoint for Prometheus/Grafana
@@ -270,13 +283,26 @@ agent_spending_usd{category="service_fees"} ${tracker.serviceFees}
 # HELP agent_stellar_tx_success_total Successful Stellar transactions
 # TYPE agent_stellar_tx_success_total counter
 agent_stellar_tx_success_total ${completedCount}
+
+# HELP agent_tool_call_cap_hits_total Times per-run tool call cap was exceeded
+# TYPE agent_tool_call_cap_hits_total counter
+agent_tool_call_cap_hits_total ${toolCallCapHitsTotal}
+
+# HELP agent_suspicious_task_total Tasks flagged by input validation blocklist
+# TYPE agent_suspicious_task_total counter
+agent_suspicious_task_total ${getSuspiciousTaskCount()}
 `);
 });
 
 let agentRuns = 0;
 
+// Per-run tool call cap (issue #90)
+const MAX_TOOL_CALLS_PER_RUN = parseInt(process.env.MAX_TOOL_CALLS_PER_RUN || "30", 10);
+let toolCallCapHitsTotal = 0;
+
 // Express API
 const app = express();
+applySecurityMiddleware(app);
 app.use(createCorsMiddleware());
 app.use(express.json());
 
@@ -387,23 +413,24 @@ app.get("/", (_req, res) => {
 });
 
 app.get("/agent/status", (_req, res) => { res.json({ paused: agentPaused }); });
-app.post("/agent/pause", (_req, res) => { agentPaused = true; console.log("  ⏸ Agent paused by caregiver"); res.json({ paused: true }); });
-app.post("/agent/resume", (_req, res) => { agentPaused = false; console.log("  ▶ Agent resumed by caregiver"); res.json({ paused: false }); });
+app.post("/agent/pause", (_req, res) => { agentPaused = true; logger.info("agent paused by caregiver"); res.json({ paused: true }); });
+app.post("/agent/resume", (_req, res) => { agentPaused = false; logger.info("agent resumed by caregiver"); res.json({ paused: false }); });
 
 app.post("/agent/run", async (req, res) => {
-  const { task } = req.body;
-  if (!task) { res.status(400).json({ error: "Missing 'task' in request body" }); return; }
+  const validation = validateTask(req.body?.task);
+  if (!validation.ok) { res.status(400).json({ error: validation.error }); return; }
   if (agentPaused) { res.status(409).json({ error: "Agent is paused. Resume from the dashboard to continue.", paused: true }); return; }
 
-  console.log(`\n🤖 Agent task: "${task.slice(0, 100)}..."`);
+  const task = validation.task!;
+  logger.info({ task, suspicious: validation.suspicious }, "agent task received");
   agentRuns++;
 
   try {
     const result = await runAgent(task);
-    console.log(`  ✅ Done. ${result.toolCalls.length} tool calls. LLM tokens: ${result.llmUsage.promptTokens}p/${result.llmUsage.completionTokens}c`);
+    logger.info({ toolCalls: result.toolCalls.length, truncated: result.truncated, promptTokens: result.llmUsage.promptTokens, completionTokens: result.llmUsage.completionTokens }, "agent task complete");
     res.json(result);
   } catch (err: any) {
-    console.error(`  ❌ Agent error: ${err.message}`);
+    logger.error({ err: err.message }, "agent run error");
     res.status(500).json({ error: err.message });
   }
 });
@@ -462,26 +489,17 @@ async function verifyWallet() {
     const account = await horizonServer.loadAccount(agentKeypair.publicKey());
     const usdcBalance = account.balances.find((b: any) => b.asset_code === "USDC" && b.asset_issuer === process.env.USDC_ISSUER);
     if (!usdcBalance) {
-      console.error(`\n❌ Agent wallet has no USDC trustline.`);
-      console.error(`   Fund at https://faucet.circle.com (Stellar Testnet)`);
-      console.error(`   Agent public key: ${agentKeypair.publicKey()}\n`);
+      logger.error({ wallet: agentKeypair.publicKey() }, "agent wallet has no USDC trustline — fund at https://faucet.circle.com");
       process.exit(1);
     }
-    console.log(`   USDC balance: ${usdcBalance.balance}`);
-    const xlmBalance = account.balances.find((b: any) => b.asset_type === "native");
-    console.log(`   XLM balance: ${xlmBalance?.balance || "0"}`);
+    logger.info({ usdc: usdcBalance.balance, xlm: account.balances.find((b: any) => b.asset_type === "native")?.balance || "0" }, "wallet balances");
   } catch (err: any) {
-    console.error(`\n❌ Failed to load agent wallet: ${err.message}`);
-    console.error(`   Agent public key: ${agentKeypair.publicKey()}\n`);
+    logger.error({ err: err.message, wallet: agentKeypair.publicKey() }, "failed to load agent wallet");
     process.exit(1);
   }
 }
 
 app.listen(PORT, async () => {
-  console.log(`\n🤖 CareGuard Agent running on http://localhost:${PORT}`);
-  console.log(`   Network: stellar:testnet`);
-  console.log(`   LLM: ${LLM_MODEL} via ${LLM_BASE_URL}`);
-  console.log(`   Agent wallet: ${agentKeypair.publicKey()}`);
+  logger.info({ port: PORT, network: "stellar:testnet", llm: LLM_MODEL, llmBaseUrl: LLM_BASE_URL, wallet: agentKeypair.publicKey() }, "CareGuard Agent started");
   await verifyWallet();
-  console.log(`   Ready.\n`);
 });

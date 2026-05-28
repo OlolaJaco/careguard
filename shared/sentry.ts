@@ -17,6 +17,7 @@
 import "dotenv/config";
 import type { Application, RequestHandler, ErrorRequestHandler } from "express";
 import { redact } from "./redact.ts";
+import { logger } from "./logger.ts";
 
 export interface SentryHandle {
   enabled: boolean;
@@ -50,7 +51,7 @@ export async function initSentry(opts: { service: string }): Promise<SentryHandl
     // we degrade gracefully instead of crashing the server.
     Sentry = await import("@sentry/node");
   } catch {
-    console.warn("  ⚠ Sentry: SENTRY_DSN set but @sentry/node not installed — skipping");
+    logger.warn("Sentry: SENTRY_DSN set but @sentry/node not installed — skipping");
     return NOOP;
   }
 
@@ -105,7 +106,7 @@ export async function initSentry(opts: { service: string }): Promise<SentryHandl
           next(err);
         });
 
-  console.log(`  ✓ Sentry initialized for ${opts.service}`);
+  logger.info({ service: opts.service }, "Sentry initialized");
 
   return {
     enabled: true,

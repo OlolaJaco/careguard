@@ -12,6 +12,7 @@ import type { Application } from "express";
 import { paymentMiddlewareFromConfig } from "@x402/express";
 import { HTTPFacilitatorClient } from "@x402/core/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
+import { logger } from "./logger.ts";
 
 const DEFAULT_FACILITATOR_URL = "https://channels.openzeppelin.com/x402/testnet";
 const OZ_FACILITATOR_URL = process.env.X402_FACILITATOR_URL || DEFAULT_FACILITATOR_URL;
@@ -81,11 +82,11 @@ process.on("unhandledRejection", (reason: any) => {
     reason?.cause?.code === "UND_ERR_CONNECT_TIMEOUT" ||
     msg.includes("bazaar")
   ) {
-    console.warn(`  ⚠ x402 startup: ${msg.slice(0, 120)}`);
+    logger.warn({ msg: msg.slice(0, 120) }, "x402 startup warning");
     return;
   }
   // Log other rejections but don't crash — Express handles errors per-request
-  console.error("Unhandled rejection:", msg);
+  logger.error({ msg }, "unhandled rejection");
 });
 
 export { OZ_FACILITATOR_URL, DEFAULT_FACILITATOR_URL };

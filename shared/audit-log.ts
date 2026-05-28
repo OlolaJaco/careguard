@@ -26,7 +26,8 @@ export function appendAuditEntry(entry: AuditEntry): void {
     appendFileSync(AUDIT_FILE, line + "\n");
   } catch (err: any) {
     // Audit logging must never crash the caller, but we want to know.
-    console.warn(`  ⚠ audit-log: failed to write entry: ${err?.message ?? err}`);
+    // Use process.stderr directly to avoid a potential circular import with logger.
+    process.stderr.write(`audit-log: failed to write entry: ${err?.message ?? err}\n`);
   }
 }
 

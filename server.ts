@@ -21,6 +21,9 @@ import { z } from "zod";
 // x402 middleware
 import { applyX402Middleware } from "./shared/x402-middleware.ts";
 import { createCorsMiddleware } from "./shared/cors.ts";
+import { applySecurityMiddleware } from "./shared/security-middleware.ts";
+import { logger } from "./shared/logger.ts";
+import { validateTask, getSuspiciousTaskCount } from "./shared/task-validation.ts";
 
 // Sentry (gated by SENTRY_DSN)
 import { initSentry } from "./shared/sentry.ts";
@@ -72,25 +75,23 @@ const envSchema = z.object({
 
 const env = envSchema.safeParse(process.env);
 if (!env.success) {
-  console.error(
+  process.stderr.write(
     env.error.issues
       .map((i) => `Missing/invalid env: ${i.path.join(".")} — ${i.message}`)
-      .join("\n"),
+      .join("\n") + "\n",
   );
   process.exit(1);
 }
 
 if (env.data.STELLAR_NETWORK === "public" && !env.data.OZ_FACILITATOR_API_KEY) {
-  console.error(
-    "Missing/invalid env: OZ_FACILITATOR_API_KEY — required when STELLAR_NETWORK=public",
+  process.stderr.write(
+    "Missing/invalid env: OZ_FACILITATOR_API_KEY — required when STELLAR_NETWORK=public\n",
   );
   process.exit(1);
 }
 
 if (env.data.STELLAR_NETWORK !== "public" && !env.data.OZ_FACILITATOR_API_KEY) {
-  console.warn(
-    "  ⚠ OZ_FACILITATOR_API_KEY not set — x402 routes will fail until configured",
-  );
+  logger.warn("OZ_FACILITATOR_API_KEY not set — x402 routes will fail until configured");
 }
 
 const PORT = env.data.PORT;
@@ -103,11 +104,15 @@ const NETWORK = (
 const llm = new OpenAI({ apiKey: env.data.LLM_API_KEY, baseURL: LLM_BASE_URL });
 const agentKeypair = Keypair.fromSecret(env.data.AGENT_SECRET_KEY);
 
+// --- Per-run tool call cap (issue #90) ---
+const MAX_TOOL_CALLS_PER_RUN = parseInt(process.env.MAX_TOOL_CALLS_PER_RUN || "30", 10);
+let toolCallCapHitsTotal = 0;
+
 // --- Express App ---
 const app = express();
 const sentry = await initSentry({ service: "careguard-server" });
 app.use(sentry.requestHandler());
-app.use(cors());
+applySecurityMiddleware(app);
 app.use(createCorsMiddleware());
 app.use(express.json());
 
@@ -895,6 +900,8 @@ async function runAgent(task: string) {
   ];
   const toolCalls: Array<{ tool: string; input: any; result: any }> = [];
   let finalResponse = "";
+  let runToolCalls = 0;
+  let truncated = false;
 
   for (let iteration = 0; iteration < 15; iteration++) {
     let response;
@@ -906,6 +913,7 @@ async function runAgent(task: string) {
         messages,
       });
     } catch (err: any) {
+      logger.error({ err: err.message, iteration }, "LLM API error");
       if (toolCalls.length > 0 && !finalResponse) {
         finalResponse = toolCalls
           .map((tc) => {
@@ -934,6 +942,16 @@ async function runAgent(task: string) {
     if (choice.message.content) finalResponse = choice.message.content;
     if (!choice.message.tool_calls?.length) break;
 
+    // Cap total tool calls at iteration boundary to keep messages array consistent
+    if (runToolCalls + choice.message.tool_calls.length > MAX_TOOL_CALLS_PER_RUN) {
+      toolCallCapHitsTotal++;
+      truncated = true;
+      appendAuditEntry({ event: "agent.tool_cap_exceeded", actor: "agent", details: { max: MAX_TOOL_CALLS_PER_RUN, ran: runToolCalls } });
+      finalResponse = finalResponse || "Tool call limit reached; partial results returned.";
+      break;
+    }
+    runToolCalls += choice.message.tool_calls.length;
+
     for (const tc of choice.message.tool_calls) {
       if (tc.type !== "function") continue;
       let args: any;
@@ -942,12 +960,13 @@ async function runAgent(task: string) {
       } catch {
         args = {};
       }
-      console.log(`  🔧 ${tc.function.name}`);
+      logger.info({ tool: tc.function.name, args: JSON.stringify(args).slice(0, 100) }, "tool call");
       let result: any;
       try {
         result = await executeTool(tc.function.name, args);
         toolCalls.push({ tool: tc.function.name, input: args, result });
       } catch (err: any) {
+        logger.error({ tool: tc.function.name, err: err.message }, "tool error");
         result = { error: err.message };
         toolCalls.push({ tool: tc.function.name, input: args, result });
       }
@@ -960,7 +979,7 @@ async function runAgent(task: string) {
     if (choice.finish_reason === "stop") break;
   }
 
-  return { response: finalResponse, toolCalls, spending: getSpendingSummary() };
+  return { response: finalResponse, toolCalls, spending: getSpendingSummary(), truncated };
 }
 
 // Agent endpoints
@@ -1019,8 +1038,9 @@ app.post("/agent/reset", (_req, res) => {
 });
 
 app.post("/agent/run", async (req, res) => {
-  if (!req.body?.task) {
-    res.status(400).json({ error: "Missing task" });
+  const validation = validateTask(req.body?.task);
+  if (!validation.ok) {
+    res.status(400).json({ error: validation.error });
     return;
   }
   if (isPaused()) {
@@ -1028,10 +1048,11 @@ app.post("/agent/run", async (req, res) => {
     res.status(409).json({ error: "Agent is paused", ...state });
     return;
   }
-  console.log(`\n🤖 Task: "${req.body.task.slice(0, 80)}..."`);
+  const task = validation.task!;
+  logger.info({ task, suspicious: validation.suspicious }, "agent task received");
   try {
-    const result = await runAgent(req.body.task);
-    console.log(`  ✅ ${result.toolCalls.length} tool calls`);
+    const result = await runAgent(task);
+    logger.info({ toolCalls: result.toolCalls.length, truncated: result.truncated }, "agent task complete");
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1058,42 +1079,38 @@ async function startWalletBalanceScheduler(): Promise<void> {
   try {
     cron = await import("node-cron");
   } catch {
-    console.warn("  ⚠ wallet scheduler enabled but node-cron not installed — falling back to setInterval(15m)");
+    logger.warn("wallet scheduler enabled but node-cron not installed — falling back to setInterval(15m)");
     setInterval(() => {
-      checkWalletBalance().then((r) => console.log(`  [wallet-check] ${formatResult(r)}`));
+      checkWalletBalance().then((r) => logger.info({ result: formatResult(r) }, "wallet check"));
     }, 15 * 60_000);
     return;
   }
 
   if (!cron.validate?.(cronExpr)) {
-    console.warn(`  ⚠ invalid WALLET_BALANCE_CHECK_CRON='${cronExpr}', falling back to */15 * * * *`);
+    logger.warn({ cronExpr }, "invalid WALLET_BALANCE_CHECK_CRON, falling back to */15 * * * *");
   }
   const expr = cron.validate?.(cronExpr) ? cronExpr : "*/15 * * * *";
 
   cron.schedule(expr, async () => {
     const r = await checkWalletBalance();
-    console.log(`  [wallet-check] ${formatResult(r)}`);
+    logger.info({ result: formatResult(r) }, "wallet check");
   });
 
-  // Also run once on startup so the dashboard reflects current state immediately.
-  checkWalletBalance().then((r) => console.log(`  [wallet-check] startup: ${formatResult(r)}`));
-  console.log(`  ✓ wallet balance scheduler armed (${expr})`);
+  checkWalletBalance().then((r) => logger.info({ result: formatResult(r) }, "wallet check startup"));
+  logger.info({ expr }, "wallet balance scheduler armed");
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   app.listen(PORT, async () => {
-    console.log(`\n🏥 CareGuard Unified Server on http://localhost:${PORT}`);
-    console.log(`   Network: ${NETWORK}`);
-    console.log(`   LLM: ${LLM_MODEL}`);
-    console.log(`   Wallet: ${agentKeypair.publicKey()}`);
+    let usdcBalance = "unknown";
     try {
       const acc = await horizonServer.loadAccount(agentKeypair.publicKey());
       const usdc = acc.balances.find((b: any) => b.asset_code === "USDC");
-      console.log(`   USDC: ${usdc?.balance || "0"}`);
+      usdcBalance = usdc?.balance || "0";
     } catch {
-      console.log("   USDC: unable to check");
+      usdcBalance = "unable to check";
     }
+    logger.info({ port: PORT, network: NETWORK, llm: LLM_MODEL, wallet: agentKeypair.publicKey(), usdc: usdcBalance }, "CareGuard Unified Server started");
     await startWalletBalanceScheduler();
-    console.log(`   Ready.\n`);
   });
 }

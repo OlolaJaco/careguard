@@ -20,16 +20,16 @@
 
 import "dotenv/config";
 import { checkWalletBalance, formatResult } from "../shared/wallet-balance.ts";
+import { logger } from "../shared/logger.ts";
 
 async function main() {
   const result = await checkWalletBalance();
-  console.log(formatResult(result));
+  logger.info({ result: formatResult(result) }, "wallet check");
   if (result.action === "error") process.exit(1);
-  // Exit cleanly so cron treats the run as successful even when we paused.
   process.exit(0);
 }
 
 main().catch((err) => {
-  console.error(`wallet check crashed: ${err?.message ?? err}`);
+  logger.error({ err: err?.message ?? err }, "wallet check crashed");
   process.exit(1);
 });

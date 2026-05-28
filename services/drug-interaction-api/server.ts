@@ -16,6 +16,8 @@ import "dotenv/config";
 import express from "express";
 import { applyX402Middleware, NETWORK, OZ_FACILITATOR_URL } from "../../shared/x402-middleware.ts";
 import { createCorsMiddleware } from "../../shared/cors.ts";
+import { applySecurityMiddleware } from "../../shared/security-middleware.ts";
+import { logger } from "../../shared/logger.ts";
 
 const PORT = parseInt(process.env.DRUG_INTERACTION_API_PORT || "3003");
 const PAY_TO = process.env.PHARMACY_2_PUBLIC_KEY;
@@ -65,6 +67,7 @@ function checkInteractions(medications: string[]) {
 }
 
 const app = express();
+applySecurityMiddleware(app);
 app.use(createCorsMiddleware());
 app.use(express.json());
 
@@ -89,8 +92,5 @@ app.get("/drug/interactions", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n💊 Drug Interaction API running on http://localhost:${PORT}`);
-  console.log(`   x402 payment: REQUIRED (${NETWORK})`);
-  console.log(`   Facilitator: ${OZ_FACILITATOR_URL}`);
-  console.log(`   Pay-to: ${PAY_TO}\n`);
+  logger.info({ port: PORT, network: NETWORK, facilitator: OZ_FACILITATOR_URL, payTo: PAY_TO }, "Drug Interaction API started");
 });

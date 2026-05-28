@@ -7,6 +7,7 @@
  */
 
 import Redis from "ioredis";
+import { logger } from "./logger.ts";
 
 export interface CacheClient {
   get(key: string): Promise<string | null>;
@@ -87,7 +88,7 @@ export function createRedisClient(urlOrInstance: string | RawRedis): CacheClient
   if (typeof urlOrInstance === "string") {
     const r = new Redis(urlOrInstance);
     r.on("error", (err: Error) => {
-      console.error(`[redis] connection error: ${err.message}`);
+      logger.error({ err: err.message }, "redis connection error");
     });
     redis = r as unknown as RawRedis;
   } else {
@@ -99,7 +100,7 @@ export function createRedisClient(urlOrInstance: string | RawRedis): CacheClient
       try {
         return await redis.get(key);
       } catch (err: unknown) {
-        console.error(`[redis] get error, returning null: ${(err as Error).message}`);
+        logger.error({ err: (err as Error).message }, "redis get error");
         return null;
       }
     },
@@ -112,7 +113,7 @@ export function createRedisClient(urlOrInstance: string | RawRedis): CacheClient
           await redis.set(key, value);
         }
       } catch (err: unknown) {
-        console.error(`[redis] set error: ${(err as Error).message}`);
+        logger.error({ err: (err as Error).message }, "redis set error");
       }
     },
 
@@ -120,7 +121,7 @@ export function createRedisClient(urlOrInstance: string | RawRedis): CacheClient
       try {
         return await redis.incr(key);
       } catch (err: unknown) {
-        console.error(`[redis] incr error: ${(err as Error).message}`);
+        logger.error({ err: (err as Error).message }, "redis incr error");
         return 0;
       }
     },
@@ -129,7 +130,7 @@ export function createRedisClient(urlOrInstance: string | RawRedis): CacheClient
       try {
         await redis.del(key);
       } catch (err: unknown) {
-        console.error(`[redis] del error: ${(err as Error).message}`);
+        logger.error({ err: (err as Error).message }, "redis del error");
       }
     },
 
@@ -138,7 +139,7 @@ export function createRedisClient(urlOrInstance: string | RawRedis): CacheClient
         const result = await redis.set(key, "1", "PX", ttlMs, "NX");
         return result === "OK";
       } catch (err: unknown) {
-        console.error(`[redis] acquireLock error: ${(err as Error).message}`);
+        logger.error({ err: (err as Error).message }, "redis acquireLock error");
         return false;
       }
     },
@@ -155,8 +156,8 @@ function getDefaultClient(): CacheClient {
     if (url) {
       _defaultClient = createRedisClient(url);
     } else {
-      console.warn(
-        "[redis] REDIS_URL not set — using in-process cache. " +
+      logger.warn(
+        "REDIS_URL not set — using in-process cache. " +
           "State is not shared across instances and is lost on restart.",
       );
       _defaultClient = createInMemoryClient();

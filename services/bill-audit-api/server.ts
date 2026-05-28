@@ -17,6 +17,8 @@ import express from "express";
 import { z } from "zod";
 import { applyX402Middleware, NETWORK, OZ_FACILITATOR_URL } from "../../shared/x402-middleware.ts";
 import { createCorsMiddleware } from "../../shared/cors.ts";
+import { applySecurityMiddleware } from "../../shared/security-middleware.ts";
+import { logger } from "../../shared/logger.ts";
 
 const PORT = parseInt(process.env.BILL_AUDIT_API_PORT || "3002");
 const PAY_TO = process.env.BILL_PROVIDER_PUBLIC_KEY;
@@ -99,6 +101,7 @@ function auditBill(lineItems: BillItem[]) {
 }
 
 const app = express();
+applySecurityMiddleware(app);
 app.use(createCorsMiddleware());
 app.use(express.json());
 
@@ -156,8 +159,5 @@ app.post("/bill/audit", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🏥 Bill Audit API running on http://localhost:${PORT}`);
-  console.log(`   x402 payment: REQUIRED (${NETWORK})`);
-  console.log(`   Facilitator: ${OZ_FACILITATOR_URL}`);
-  console.log(`   Pay-to: ${PAY_TO}\n`);
+  logger.info({ port: PORT, network: NETWORK, facilitator: OZ_FACILITATOR_URL, payTo: PAY_TO }, "Bill Audit API started");
 });

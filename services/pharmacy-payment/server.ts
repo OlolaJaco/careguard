@@ -18,6 +18,8 @@ import { Mppx, Store } from "mppx/server";
 import { stellar } from "@stellar/mpp/charge/server";
 import { USDC_SAC_TESTNET } from "@stellar/mpp";
 import { createCorsMiddleware } from "../../shared/cors.ts";
+import { applySecurityMiddleware } from "../../shared/security-middleware.ts";
+import { logger } from "../../shared/logger.ts";
 
 const PORT = parseInt(process.env.PHARMACY_PAYMENT_PORT || "3005");
 const RECIPIENT = process.env.PHARMACY_1_PUBLIC_KEY;
@@ -47,6 +49,7 @@ function saveOrder(order: any) {
 }
 
 const app = express();
+applySecurityMiddleware(app);
 app.use(createCorsMiddleware());
 app.use(express.json());
 
@@ -146,9 +149,5 @@ app.post("/pharmacy/order", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n💰 Pharmacy Payment Service (MPP Charge) running on http://localhost:${PORT}`);
-  console.log(`   Protocol: MPP Charge on Stellar`);
-  console.log(`   Network: ${NETWORK}`);
-  console.log(`   Recipient: ${RECIPIENT}`);
-  console.log(`   Currency: ${USDC_SAC_TESTNET}\n`);
+  logger.info({ port: PORT, network: NETWORK, recipient: RECIPIENT, currency: USDC_SAC_TESTNET }, "Pharmacy Payment Service (MPP Charge) started");
 });

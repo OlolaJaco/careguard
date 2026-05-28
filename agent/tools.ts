@@ -9,6 +9,7 @@
 
 import "dotenv/config";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { logger } from "../shared/logger.ts";
 import { Keypair, Networks, TransactionBuilder, Operation, Asset, Horizon } from "@stellar/stellar-sdk";
 import { wrapFetchWithPayment, x402Client, decodePaymentResponseHeader } from "@x402/fetch";
 import { createEd25519Signer, ExactStellarScheme } from "@x402/stellar";
@@ -59,7 +60,7 @@ const mppClient = Mppx.create({
       keypair: agentKeypair,
       mode: "pull",
       onProgress: (event) => {
-        console.log(`  [MPP] ${event.type}${("hash" in event) ? `: ${(event as any).hash}` : ""}`);
+        logger.info({ type: event.type, hash: "hash" in event ? (event as any).hash : undefined }, "[MPP] progress");
         if (event.type === "paid" && "hash" in event) {
           lastMppTxHash = (event as any).hash;
         }
@@ -135,7 +136,7 @@ export function resetSpendingTracker() {
 // --- Tool: Compare pharmacy prices (pays via x402) ---
 export async function comparePharmacyPrices(drugName: string, zipCode: string = "90210") {
   const url = `${PHARMACY_API}/pharmacy/compare?drug=${encodeURIComponent(drugName)}&zip=${encodeURIComponent(zipCode)}`;
-  console.log(`  [x402] Paying for pharmacy price query: ${drugName}`);
+  logger.info({ drug: drugName }, "[x402] paying for pharmacy price query");
 
   const response = await x402Fetch(url);
 
@@ -168,7 +169,7 @@ export async function comparePharmacyPrices(drugName: string, zipCode: string = 
 
 // --- Tool: Fetch Rosa's hospital bill (free endpoint, no x402 payment) ---
 export async function fetchRosaBill() {
-  console.log(`  [fetch] Getting Rosa's hospital bill from ${BILL_AUDIT_API}/bill/sample`);
+  logger.info("[fetch] getting Rosa's hospital bill");
 
   const response = await fetch(`${BILL_AUDIT_API}/bill/sample`);
 
@@ -181,7 +182,7 @@ export async function fetchRosaBill() {
 
 // --- Tool: Fetch Rosa's bill AND audit it in one step (pays via x402) ---
 export async function fetchAndAuditBill() {
-  console.log(`  [fetch+audit] Getting Rosa's bill and auditing it`);
+  logger.info("[fetch+audit] getting Rosa's bill and auditing it");
 
   // Step 1: Fetch the bill (free)
   const billResponse = await fetch(`${BILL_AUDIT_API}/bill/sample`);
@@ -196,7 +197,7 @@ export async function fetchAndAuditBill() {
 
 // --- Tool: Audit a medical bill (pays via x402) ---
 export async function auditBill(lineItems: Array<{ description: string; cptCode: string; quantity: number; chargedAmount: number }>) {
-  console.log(`  [x402] Paying for bill audit (${lineItems.length} line items)`);
+  logger.info({ lineItemCount: lineItems.length }, "[x402] paying for bill audit");
 
   let response: Response;
   try {
@@ -281,7 +282,7 @@ export async function auditBill(lineItems: Array<{ description: string; cptCode:
 // --- Tool: Check drug interactions (pays via x402) ---
 export async function checkDrugInteractions(medications: string[]) {
   const medsParam = medications.join(",");
-  console.log(`  [x402] Paying for drug interaction check: ${medsParam}`);
+  logger.info({ medicationCount: medications.length }, "[x402] paying for drug interaction check");
 
   const response = await x402Fetch(`${DRUG_INTERACTION_API}/drug/interactions?meds=${encodeURIComponent(medsParam)}`);
 
@@ -360,7 +361,7 @@ export async function payForMedication(pharmacyId: string, pharmacyName: string,
   }
 
   // Execute real MPP charge payment to pharmacy
-  console.log(`  [MPP] Paying ${pharmacyName} $${amount} for ${drugName}`);
+  logger.info({ pharmacy: pharmacyName, amount }, "[MPP] paying for medication");
 
   let stellarTxHash: string | undefined;
   let mppOrderId: string | undefined;
@@ -432,7 +433,7 @@ export async function payBill(providerId: string, providerName: string, descript
   const recipientKey = process.env.BILL_PROVIDER_PUBLIC_KEY;
   if (!recipientKey) return { success: false, error: "BILL_PROVIDER_PUBLIC_KEY not configured" };
 
-  console.log(`  [Stellar] Transferring $${amount} USDC to ${providerName} (${recipientKey.slice(0, 8)}...)`);
+  logger.info({ provider: providerName, amount }, "[Stellar] transferring USDC");
 
   let stellarTxHash: string | undefined;
 
@@ -457,7 +458,7 @@ export async function payBill(providerId: string, providerName: string, descript
     stellarTx.sign(agentKeypair);
     const result = await horizonServer.submitTransaction(stellarTx);
     stellarTxHash = (result as any).hash;
-    console.log(`  [Stellar] TX confirmed: ${stellarTxHash}`);
+    logger.info({ txHash: stellarTxHash }, "[Stellar] TX confirmed");
   } catch (err: any) {
     const errorDetail = err?.response?.data?.extras?.result_codes || err.message;
     return { success: false, error: `Stellar USDC transfer failed: ${JSON.stringify(errorDetail)}` };

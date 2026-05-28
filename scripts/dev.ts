@@ -4,6 +4,7 @@
  */
 
 import { spawn, type ChildProcess } from "child_process";
+import { logger } from "../shared/logger.ts";
 
 const SERVICES = [
   { name: "pharmacy", script: "services/pharmacy-api/server.ts", color: "\x1b[36m" },       // cyan
@@ -36,7 +37,7 @@ for (const svc of SERVICES) {
     log(svc.name, "\x1b[31m", `exited with code ${code}`);
     // If any service crashes, kill all others
     if (code !== 0 && code !== null) {
-      console.error(`\n\x1b[31m${svc.name} crashed. Shutting down all services.\x1b[0m\n`);
+      logger.error({ service: svc.name }, "service crashed, shutting down all services");
       for (const c of children) c.kill();
       process.exit(1);
     }
@@ -47,7 +48,7 @@ for (const svc of SERVICES) {
 
 // Handle Ctrl+C gracefully
 process.on("SIGINT", () => {
-  console.log("\n\x1b[33mShutting down all services...\x1b[0m");
+  logger.info("shutting down all services");
   for (const c of children) c.kill();
   process.exit(0);
 });
@@ -57,4 +58,4 @@ process.on("SIGTERM", () => {
   process.exit(0);
 });
 
-console.log(`\x1b[36m\nStarting ${SERVICES.length} CareGuard services...\x1b[0m\n`);
+logger.info({ count: SERVICES.length }, "starting CareGuard services");

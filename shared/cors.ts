@@ -1,19 +1,20 @@
 import cors from "cors";
 import type { RequestHandler } from "express";
+import { logger } from "./logger.ts";
 
 export function createCorsMiddleware(): RequestHandler {
   const nodeEnv = process.env.NODE_ENV ?? "development";
 
   if (nodeEnv !== "production") {
-    console.warn(
-      "⚠ CORS: running in non-production mode — all origins allowed (wildcard). " +
+    logger.warn(
+      "CORS: running in non-production mode — all origins allowed (wildcard). " +
         "Set NODE_ENV=production and ALLOWED_ORIGINS to restrict access.",
     );
     return cors() as RequestHandler;
   }
 
   const allowed = parseAllowedOrigins();
-  console.log(`✓ CORS: allowlist = [${allowed.join(", ")}]`);
+  logger.info(`CORS: allowlist = [${allowed.join(", ")}]`);
 
   return cors({
     origin(requestOrigin, callback) {
@@ -36,8 +37,9 @@ function parseAllowedOrigins(): string[] {
 
   if (fromEnv.length > 0) return fromEnv;
 
-  // Defaults: dashboard local dev + configured prod URL
+  // Defaults: dashboard local dev + configured prod URLs
   const defaults = ["http://localhost:3000"];
   if (process.env.PROD_URL) defaults.push(process.env.PROD_URL);
+  if (process.env.DASHBOARD_URL) defaults.push(process.env.DASHBOARD_URL);
   return defaults;
 }

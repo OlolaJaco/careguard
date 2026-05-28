@@ -17,6 +17,8 @@ import express from "express";
 import { applyX402Middleware, NETWORK, OZ_FACILITATOR_URL } from "../../shared/x402-middleware.ts";
 import { createPricingProvider } from "../../shared/pricing-sources.ts";
 import { createCorsMiddleware } from "../../shared/cors.ts";
+import { applySecurityMiddleware } from "../../shared/security-middleware.ts";
+import { logger } from "../../shared/logger.ts";
 
 const PORT = parseInt(process.env.PHARMACY_API_PORT || "3001");
 const PAY_TO = process.env.PHARMACY_1_PUBLIC_KEY;
@@ -27,6 +29,7 @@ if (!PAY_TO) throw new Error("PHARMACY_1_PUBLIC_KEY required in .env");
 const pricingProvider = createPricingProvider();
 
 const app = express();
+applySecurityMiddleware(app);
 app.use(createCorsMiddleware());
 app.use(express.json());
 
@@ -103,10 +106,5 @@ app.get("/pharmacy/compare", async (req, res) => {
 
 app.listen(PORT, async () => {
   const drugCount = await pricingProvider.getDrugCount();
-  console.log(`\n💊 Pharmacy Price API running on http://localhost:${PORT}`);
-  console.log(`   x402 payment: REQUIRED (${NETWORK})`);
-  console.log(`   Facilitator: ${OZ_FACILITATOR_URL}`);
-  console.log(`   Pay-to: ${PAY_TO}`);
-  console.log(`   Pricing Provider: ${pricingProvider.name}`);
-  console.log(`   Available drugs: ${drugCount}\n`);
+  logger.info({ port: PORT, network: NETWORK, facilitator: OZ_FACILITATOR_URL, payTo: PAY_TO, provider: pricingProvider.name, drugCount }, "Pharmacy Price API started");
 });

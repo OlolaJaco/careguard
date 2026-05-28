@@ -6,6 +6,8 @@
  * forwards to it via the same `notify()` signature.
  */
 
+import { logger } from "./logger.ts";
+
 export type NotificationLevel = "info" | "warning" | "critical";
 
 export interface Notification {
@@ -26,9 +28,9 @@ const ICONS: Record<NotificationLevel, string> = {
 export async function notify(n: Notification): Promise<void> {
   const line = `${ICONS[n.level]} [${n.level.toUpperCase()}] ${n.title} — ${n.description}`;
   if (n.level === "critical" || n.level === "warning") {
-    console.warn(line);
+    logger.warn({ title: n.title, description: n.description }, line);
   } else {
-    console.log(line);
+    logger.info({ title: n.title, description: n.description }, line);
   }
 
   if (!SLACK_WEBHOOK_URL) return;
@@ -44,6 +46,6 @@ export async function notify(n: Notification): Promise<void> {
     });
   } catch (err: any) {
     // Notifications must never crash the caller.
-    console.warn(`  ⚠ notify: failed to deliver Slack webhook: ${err?.message ?? err}`);
+    logger.warn({ err: err?.message ?? err }, "failed to deliver Slack webhook");
   }
 }

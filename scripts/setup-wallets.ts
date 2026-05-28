@@ -6,6 +6,7 @@
  */
 
 import { Keypair, Networks, TransactionBuilder, Operation, Asset, Horizon } from "@stellar/stellar-sdk";
+import { logger } from "../shared/logger.ts";
 
 const HORIZON_URL = "https://horizon-testnet.stellar.org";
 const FRIENDBOT_URL = "https://friendbot.stellar.org";
@@ -40,7 +41,7 @@ async function addUsdcTrustline(keypair: Keypair): Promise<void> {
   );
 
   if (hasTrustline) {
-    console.log(`  ✓ USDC trustline already exists for ${keypair.publicKey().slice(0, 8)}...`);
+    logger.info({ wallet: keypair.publicKey().slice(0, 8) }, "USDC trustline already exists");
     return;
   }
 
@@ -54,11 +55,11 @@ async function addUsdcTrustline(keypair: Keypair): Promise<void> {
 
   tx.sign(keypair);
   await server.submitTransaction(tx);
-  console.log(`  ✓ USDC trustline added for ${keypair.publicKey().slice(0, 8)}...`);
+  logger.info({ wallet: keypair.publicKey().slice(0, 8) }, "USDC trustline added");
 }
 
 async function main() {
-  console.log("=== CareGuard Wallet Setup ===\n");
+  logger.info("CareGuard Wallet Setup starting");
 
   const wallets: WalletInfo[] = [
     { name: "AGENT", ...generateKeypair() },
@@ -69,45 +70,37 @@ async function main() {
     { name: "BILL_PROVIDER", ...generateKeypair() },
   ];
 
-  // Step 1: Fund all accounts
-  console.log("Step 1: Funding accounts via Friendbot...\n");
+  logger.info("step 1: funding accounts via Friendbot");
   for (const wallet of wallets) {
     try {
       await fundAccount(wallet.publicKey);
-      console.log(`  ✓ Funded ${wallet.name}: ${wallet.publicKey.slice(0, 8)}...`);
+      logger.info({ name: wallet.name, wallet: wallet.publicKey.slice(0, 8) }, "funded");
     } catch (err: any) {
-      console.error(`  ✗ Failed to fund ${wallet.name}: ${err.message}`);
+      logger.error({ name: wallet.name, err: err.message }, "failed to fund wallet");
     }
   }
 
-  // Step 2: Add USDC trustlines
-  console.log("\nStep 2: Adding USDC trustlines...\n");
+  logger.info("step 2: adding USDC trustlines");
   for (const wallet of wallets) {
     try {
       const keypair = Keypair.fromSecret(wallet.secretKey);
       await addUsdcTrustline(keypair);
     } catch (err: any) {
-      console.error(`  ✗ Failed trustline for ${wallet.name}: ${err.message}`);
+      logger.error({ name: wallet.name, err: err.message }, "failed to add trustline");
     }
   }
 
-  // Step 3: Output .env values
-  console.log("\n=== Add these to your .env file ===\n");
+  // Step 3: Output .env values — written directly so they are copy-pasteable
+  process.stdout.write("\n=== Add these to your .env file ===\n\n");
   for (const wallet of wallets) {
-    console.log(`${wallet.name}_SECRET_KEY=${wallet.secretKey}`);
-    console.log(`${wallet.name}_PUBLIC_KEY=${wallet.publicKey}`);
+    process.stdout.write(`${wallet.name}_SECRET_KEY=${wallet.secretKey}\n`);
+    process.stdout.write(`${wallet.name}_PUBLIC_KEY=${wallet.publicKey}\n`);
   }
-
-  console.log(`\n# USDC Testnet`);
-  console.log(`USDC_ISSUER=${USDC_ISSUER}`);
-
-  console.log(`\n=== IMPORTANT ===`);
-  console.log(`Now get testnet USDC for the AGENT wallet:`);
-  console.log(`1. Go to https://faucet.circle.com`);
-  console.log(`2. Select "Stellar Testnet"`);
-  console.log(`3. Paste the AGENT public key: ${wallets[0].publicKey}`);
-  console.log(`4. Request USDC (you'll get 100 USDC)`);
-  console.log(`\nAlso fund the CAREGIVER wallet with USDC for testing.`);
+  process.stdout.write(`\n# USDC Testnet\nUSDC_ISSUER=${USDC_ISSUER}\n`);
+  process.stdout.write(`\n=== IMPORTANT ===\nNow get testnet USDC for the AGENT wallet:\n`);
+  process.stdout.write(`1. Go to https://faucet.circle.com\n2. Select "Stellar Testnet"\n`);
+  process.stdout.write(`3. Paste the AGENT public key: ${wallets[0].publicKey}\n`);
+  process.stdout.write(`4. Request USDC (you'll get 100 USDC)\n\nAlso fund the CAREGIVER wallet with USDC for testing.\n`);
 }
 
 function generateKeypair(): { publicKey: string; secretKey: string } {
@@ -115,4 +108,4 @@ function generateKeypair(): { publicKey: string; secretKey: string } {
   return { publicKey: kp.publicKey(), secretKey: kp.secret() };
 }
 
-main().catch(console.error);
+main().catch((err) => { logger.error({ err: err?.message ?? err }, "setup failed"); process.exit(1); });
