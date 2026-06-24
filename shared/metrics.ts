@@ -91,6 +91,12 @@ export const agentTransactionsTotal = new Counter({
   registers: [registry],
 });
 
+export const agentLlmErrorTotal = new Counter({
+  name: "agent_llm_error_total",
+  help: "Total LLM API errors during agent runs",
+  registers: [registry],
+});
+
 export function metricsHandler(): RequestHandler {
   return async (req, res) => {
     const token = process.env.METRICS_TOKEN;

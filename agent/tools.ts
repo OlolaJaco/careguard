@@ -1792,14 +1792,14 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'pay_for_medication',
     description:
-      'Pay a pharmacy for a medication order via MPP Charge on Stellar (real USDC payment). Subject to spending policy limits.',
+      'Pay a pharmacy for a medication order via MPP Charge on Stellar (real USDC payment). Subject to spending policy limits. Amount must be between $0.01 and $10,000.',
     input_schema: strictInputSchema({
       type: 'object' as const,
       properties: {
         pharmacy_id: { type: 'string' },
         pharmacy_name: { type: 'string' },
         drug_name: { type: 'string' },
-        amount: { type: 'number' },
+        amount: { type: 'number', description: 'Payment amount in USD (min: 0.01, max: 10000)' },
         days_supply: { type: 'number', description: 'Days supply for adherence tracking (default: 30)' },
         recipient_id: { type: 'string', description: 'Care recipient ID (default: rosa)' },
       },
@@ -1809,14 +1809,14 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'pay_bill',
     description:
-      'Pay a medical bill via direct Stellar USDC transfer. Subject to spending policy limits. If the bill has been audited and errors found, pay only the corrected amount.',
+      'Pay a medical bill via direct Stellar USDC transfer. Subject to spending policy limits. If the bill has been audited and errors found, pay only the corrected amount. Amount must be between $0.01 and $10,000.',
     input_schema: strictInputSchema({
       type: 'object' as const,
       properties: {
         provider_id: { type: 'string' },
         provider_name: { type: 'string' },
         description: { type: 'string' },
-        amount: { type: 'number' },
+        amount: { type: 'number', description: 'Payment amount in USD (min: 0.01, max: 10000)' },
         recipient_id: { type: 'string', description: 'Care recipient ID (default: rosa)' },
       },
       required: ['provider_id', 'provider_name', 'description', 'amount'],

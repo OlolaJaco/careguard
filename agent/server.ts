@@ -248,6 +248,17 @@ async function runAgent(task: string) {
       });
     } catch (llmErr: any) {
       logger.error({ err: llmErr.message, iteration }, "LLM API error");
+      agentLlmErrorTotal.inc();
+      finalResponse = JSON.stringify({
+        status: "llm_error",
+        toolCallsCompleted: toolCalls.length,
+        message: `LLM API error: ${llmErr.message}. Agent run was interrupted — not all tool calls may have completed.`,
+        toolCalls: toolCalls.map(tc => ({
+          tool: tc.tool,
+          input: tc.input,
+          result: tc.result,
+        })),
+      });
       if (toolCalls.length > 0 && !finalResponse) {
         finalResponse = toolCalls.map(tc => {
           if (tc.result?.error) return `${tc.tool}: ${tc.result.error}`;
