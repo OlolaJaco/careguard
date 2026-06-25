@@ -62,6 +62,7 @@ export const TransactionSchema = z.object({
   description: z.string(),
   amount: z.number(),
   recipient: z.string(),
+  // Always a real 64-char hex Stellar tx hash, or undefined (#14).
   stellarTxHash: z.string().optional(),
   mppOrderId: z.string().optional(),
   status: z.string(),

@@ -75,6 +75,9 @@ export interface SpendingPolicy {
   };
 }
 
+// A confirmed Stellar transaction hash is always 64 lowercase/uppercase hex chars.
+export const STELLAR_TX_HASH_RE = /^[0-9a-f]{64}$/i;
+
 export interface Transaction {
   id: string;
   timestamp: string;
@@ -82,6 +85,8 @@ export interface Transaction {
   description: string;
   amount: number;
   recipient: string;
+  // Always a real 64-char hex Stellar tx hash, or undefined. Never a raw/base64
+  // payment receipt — the backend normalizes that before recording the transaction (#14).
   stellarTxHash?: string;
   mppOrderId?: string;
   status:

@@ -198,8 +198,9 @@ describe("payForMedication — success path (Issue #35)", () => {
   });
 
   it("sets stellarTxHash from Payment-Receipt header when no progress event fired", async () => {
+    const validHash = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd";
     const encodedReceipt = Buffer.from(
-      JSON.stringify({ reference: "receipt-ref-abc", hash: "hashfromheader" })
+      JSON.stringify({ reference: validHash, hash: "hashfromheader" })
     ).toString("base64");
 
     mockMppFetch.mockResolvedValueOnce({
@@ -210,8 +211,25 @@ describe("payForMedication — success path (Issue #35)", () => {
     const r = await payForMedication("p1", "Pharma", "Drug", 50);
     expect(r.success).toBe(true);
     const tx = (r as any).transaction;
-    expect(tx.stellarTxHash).toBe("receipt-ref-abc");
+    expect(tx.stellarTxHash).toBe(validHash);
     expect(tx.mppOrderId).toBe("order-222");
+  });
+
+  it("normalizes a non-hex receipt reference to undefined instead of storing a raw blob (#14)", async () => {
+    const encodedReceipt = Buffer.from(
+      JSON.stringify({ reference: "receipt-ref-abc" })
+    ).toString("base64");
+
+    mockMppFetch.mockResolvedValueOnce({
+      json: async () => ({ success: true, order: { id: "order-223" } }),
+      headers: { get: (h: string) => (h === "Payment-Receipt" ? encodedReceipt : null) },
+    });
+
+    const r = await payForMedication("p1", "Pharma", "Drug", 50);
+    expect(r.success).toBe(true);
+    const tx = (r as any).transaction;
+    expect(tx.stellarTxHash).toBeUndefined();
+    expect(tx.mppOrderId).toBe("order-223");
   });
 
   it("accumulates spending in the tracker after a successful payment", async () => {

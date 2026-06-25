@@ -39,7 +39,7 @@ import {
 } from '@x402/fetch';
 import { createEd25519Signer, ExactStellarScheme } from '@x402/stellar';
 import { createMppClient, type MppClientInstance } from './mpp-client.ts';
-import type { SpendingPolicy, Transaction } from '../shared/types.ts';
+import { STELLAR_TX_HASH_RE, type SpendingPolicy, type Transaction } from '../shared/types.ts';
 import { SPENDING_TIMEZONE, getLocalDateStr } from './tz.ts';
 export { SPENDING_TIMEZONE, getLocalDateStr };
 import { appendAuditEntry } from '../shared/audit-log.ts';
@@ -396,7 +396,15 @@ function createEmptySpendingTracker(): SpendingTracker {
 function readSpendingFromDisk(recipientId?: string): SpendingTracker {
   const file = getSpendingFile(recipientId);
   if (!existsSync(file)) return createEmptySpendingTracker();
-  return JSON.parse(readFileSync(file, 'utf-8'));
+  try {
+    return JSON.parse(readFileSync(file, 'utf-8'));
+  } catch (err: any) {
+    logger.warn(
+      { file, error: err.message },
+      '[Persistence] spending.json is corrupted; falling back to an empty tracker',
+    );
+    return createEmptySpendingTracker();
+  }
 }
 
 export function loadSpending(recipientId?: string): SpendingTracker {
@@ -463,8 +471,15 @@ function recordServiceFee(
 function loadPolicy(recipientId?: string): SpendingPolicy {
   const file = getPolicyFile(recipientId);
   if (!existsSync(file)) return { ...DEFAULT_POLICY };
-  try { return JSON.parse(readFileSync(file, 'utf-8')); }
-  catch { return { ...DEFAULT_POLICY }; }
+  try {
+    return JSON.parse(readFileSync(file, 'utf-8'));
+  } catch (err: any) {
+    logger.warn(
+      { file, error: err.message },
+      '[Persistence] policy.json is corrupted; falling back to the default policy',
+    );
+    return { ...DEFAULT_POLICY };
+  }
 }
 
 function savePolicy(policy: SpendingPolicy, recipientId?: string) {
@@ -1045,6 +1060,17 @@ async function executeMedicationPayment(
   } catch (err: any) {
     stellarTxSubmittedTotal.inc({ result: 'error' });
     return { success: false, error: `MPP payment failed: ${err.message}` };
+  }
+
+  // Standardize on a real 64-char hex hash or undefined (#14) — never an
+  // un-decodable receipt blob — so downstream consumers (e.g. TxLink) don't
+  // need to guess at the shape of this field.
+  if (stellarTxHash && !STELLAR_TX_HASH_RE.test(stellarTxHash)) {
+    logger.warn(
+      { receivedValue: stellarTxHash },
+      '[MPP] payment succeeded but receipt did not contain a valid Stellar tx hash',
+    );
+    stellarTxHash = undefined;
   }
 
   stellarTxSubmittedTotal.inc({ result: 'success' });
